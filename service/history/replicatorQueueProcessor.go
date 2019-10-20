@@ -74,7 +74,7 @@ func newReplicatorQueueProcessor(
 	logger log.Logger,
 ) ReplicatorQueueProcessor {
 
-	currentClusterName := shard.GetService().GetClusterMetadata().GetCurrentClusterName()
+	currentClusterName := shard.GetClusterMetadata().GetCurrentClusterName()
 
 	config := shard.GetConfig()
 	options := &QueueProcessorOptions{

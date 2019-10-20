@@ -81,7 +81,7 @@ func newTransferQueueActiveProcessor(
 		MaxRetryCount:                      config.TransferTaskMaxRetryCount,
 		MetricScope:                        metrics.TransferActiveQueueProcessorScope,
 	}
-	currentClusterName := shard.GetService().GetClusterMetadata().GetCurrentClusterName()
+	currentClusterName := shard.GetClusterMetadata().GetCurrentClusterName()
 	logger = logger.WithTags(tag.ClusterName(currentClusterName))
 	transferTaskFilter := func(taskInfo *taskInfo) (bool, error) {
 		task, ok := taskInfo.task.(*persistence.TransferTaskInfo)
@@ -165,7 +165,7 @@ func newTransferQueueFailoverProcessor(
 		MaxRetryCount:                      config.TransferTaskMaxRetryCount,
 		MetricScope:                        metrics.TransferActiveQueueProcessorScope,
 	}
-	currentClusterName := shard.GetService().GetClusterMetadata().GetCurrentClusterName()
+	currentClusterName := shard.GetClusterMetadata().GetCurrentClusterName()
 	failoverUUID := uuid.New()
 	logger = logger.WithTags(
 		tag.ClusterName(currentClusterName),

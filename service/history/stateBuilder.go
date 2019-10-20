@@ -84,7 +84,7 @@ func newStateBuilder(
 
 	return &stateBuilderImpl{
 		shard:           shard,
-		clusterMetadata: shard.GetService().GetClusterMetadata(),
+		clusterMetadata: shard.GetClusterMetadata(),
 		msBuilder:       msBuilder,
 		domainCache:     shard.GetDomainCache(),
 		logger:          logger,

@@ -1204,8 +1204,7 @@ func (c *workflowExecutionContextImpl) reapplyEvents(
 		WorkflowId: common.StringPtr(workflowID),
 	}
 	domainCache := c.shard.GetDomainCache()
-	clientBean := c.shard.GetService().GetClientBean()
-	serializer := c.shard.GetService().GetPayloadSerializer()
+	serializer := c.shard.GetPayloadSerializer()
 	domainEntry, err := domainCache.GetDomainByID(domainID)
 	if err != nil {
 		return err
@@ -1236,7 +1235,7 @@ func (c *workflowExecutionContextImpl) reapplyEvents(
 	// The active cluster of the domain is differ from the current cluster
 	// Use frontend client to route this request to the active cluster
 	// Reapplication only happens in active cluster
-	return clientBean.GetRemoteFrontendClient(activeCluster).ReapplyEvents(
+	return c.shard.GetRemoteFrontendClient(activeCluster).ReapplyEvents(
 		ctx,
 		&workflow.ReapplyEventsRequest{
 			DomainName:        common.StringPtr(domainEntry.GetInfo().Name),

@@ -25,6 +25,12 @@ import (
 	"time"
 
 	"github.com/uber-go/tally"
+	"go.uber.org/cadence/.gen/go/cadence/workflowserviceclient"
+	"go.uber.org/cadence/.gen/go/shared"
+	cclient "go.uber.org/cadence/client"
+	"go.uber.org/cadence/worker"
+	"go.uber.org/zap"
+
 	"github.com/uber/cadence/client"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/backoff"
@@ -33,14 +39,9 @@ import (
 	"github.com/uber/cadence/common/log/tag"
 	"github.com/uber/cadence/common/metrics"
 	p "github.com/uber/cadence/common/persistence"
-	pfactory "github.com/uber/cadence/common/persistence/persistence-factory"
+	client2 "github.com/uber/cadence/common/persistence/client"
 	"github.com/uber/cadence/common/service/config"
 	"github.com/uber/cadence/common/service/dynamicconfig"
-	"go.uber.org/cadence/.gen/go/cadence/workflowserviceclient"
-	"go.uber.org/cadence/.gen/go/shared"
-	cclient "go.uber.org/cadence/client"
-	"go.uber.org/cadence/worker"
-	"go.uber.org/zap"
 )
 
 type (
@@ -170,7 +171,7 @@ func (s *Scanner) startWorkflow(client cclient.Client, options cclient.StartWork
 
 func (s *Scanner) buildContext() error {
 	cfg := &s.context.cfg
-	pFactory := pfactory.New(cfg.Persistence, cfg.ClusterMetadata.GetCurrentClusterName(), s.context.metricsClient, s.context.logger)
+	pFactory := client2.New(cfg.Persistence, cfg.ClusterMetadata.GetCurrentClusterName(), s.context.metricsClient, s.context.logger)
 	domainDB, err := pFactory.NewMetadataManager()
 	if err != nil {
 		return err
@@ -179,7 +180,7 @@ func (s *Scanner) buildContext() error {
 	if err != nil {
 		return err
 	}
-	historyDB, err := pFactory.NewHistoryV2Manager()
+	historyDB, err := pFactory.NewHistoryManager()
 	if err != nil {
 		return err
 	}

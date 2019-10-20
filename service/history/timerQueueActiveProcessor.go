@@ -60,7 +60,7 @@ func newTimerQueueActiveProcessor(
 	logger log.Logger,
 ) *timerQueueActiveProcessorImpl {
 
-	currentClusterName := shard.GetService().GetClusterMetadata().GetCurrentClusterName()
+	currentClusterName := shard.GetClusterMetadata().GetCurrentClusterName()
 	timeNow := func() time.Time {
 		return shard.GetCurrentTime(currentClusterName)
 	}
@@ -125,7 +125,7 @@ func newTimerQueueFailoverProcessor(
 	logger log.Logger,
 ) (func(ackLevel TimerSequenceID) error, *timerQueueActiveProcessorImpl) {
 
-	currentClusterName := shard.GetService().GetClusterMetadata().GetCurrentClusterName()
+	currentClusterName := shard.GetClusterMetadata().GetCurrentClusterName()
 	timeNow := func() time.Time {
 		// should use current cluster's time when doing domain failover
 		return shard.GetCurrentTime(currentClusterName)
@@ -804,7 +804,7 @@ func (t *timerQueueActiveProcessorImpl) updateWorkflowExecution(
 	now := t.shard.GetTimeSource().Now()
 	err = context.updateWorkflowExecutionAsActive(now)
 	if err != nil {
-		if isShardOwnershiptLostError(err) {
+		if isShardOwnershipLostError(err) {
 			// Shard is stolen.  Stop timer processing to reduce duplicates
 			t.timerQueueProcessorBase.Stop()
 			return err

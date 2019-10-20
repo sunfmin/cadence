@@ -592,7 +592,7 @@ func (s *timerQueueFailoverAckMgrSuite) SetupTest() {
 		s.minLevel,
 		s.maxLevel,
 		func() time.Time {
-			return s.mockShard.GetCurrentTime(s.mockShard.GetService().GetClusterMetadata().GetCurrentClusterName())
+			return s.mockShard.GetCurrentTime(s.mockShard.GetClusterMetadata().GetCurrentClusterName())
 		},
 		func(ackLevel TimerSequenceID) error {
 			return s.mockShard.UpdateTimerFailoverLevel(
@@ -620,7 +620,7 @@ func (s *timerQueueFailoverAckMgrSuite) TearDownTest() {
 
 func (s *timerQueueFailoverAckMgrSuite) TestIsProcessNow() {
 	// failover test to process whether to process a timer is use the current cluster's time
-	now := s.mockShard.GetCurrentTime(s.mockShard.GetService().GetClusterMetadata().GetCurrentClusterName())
+	now := s.mockShard.GetCurrentTime(s.mockShard.GetClusterMetadata().GetCurrentClusterName())
 	s.True(s.timerQueueFailoverAckMgr.isProcessNow(time.Time{}))
 	s.True(s.timerQueueFailoverAckMgr.isProcessNow(now))
 
@@ -741,9 +741,10 @@ func (s *timerQueueFailoverAckMgrSuite) TestReadTimerTasks_InTheFuture() {
 }
 
 func (s *timerQueueFailoverAckMgrSuite) TestReadCompleteUpdateTimerTasks() {
-	from := time.Now().Add(-10 * time.Second)
+	to := time.Now()
+	from := to.Add(-10 * time.Second)
 	s.timerQueueFailoverAckMgr.minQueryLevel = from
-	s.timerQueueFailoverAckMgr.maxQueryLevel = from
+	s.timerQueueFailoverAckMgr.maxQueryLevel = to
 	s.timerQueueFailoverAckMgr.ackLevel = TimerSequenceID{VisibilityTimestamp: from}
 
 	// create 3 timers, timer1 < timer2 < timer3 < now

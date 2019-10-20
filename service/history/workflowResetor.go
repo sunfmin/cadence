@@ -142,7 +142,7 @@ func (w *workflowResetorImpl) ResetWorkflowExecution(
 
 func (w *workflowResetorImpl) checkDomainStatus(newMutableState mutableState, prevRunVersion int64, domain string) error {
 	if newMutableState.GetReplicationState() != nil || newMutableState.GetVersionHistories() != nil {
-		clusterMetadata := w.eng.shard.GetService().GetClusterMetadata()
+		clusterMetadata := w.eng.shard.GetClusterMetadata()
 		currentVersion := newMutableState.GetCurrentVersion()
 		if currentVersion < prevRunVersion {
 			return ce.NewDomainNotActiveError(

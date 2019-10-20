@@ -58,7 +58,7 @@ func newConflictResolver(shard ShardContext, context workflowExecutionContext, h
 
 	return &conflictResolverImpl{
 		shard:           shard,
-		clusterMetadata: shard.GetService().GetClusterMetadata(),
+		clusterMetadata: shard.GetClusterMetadata(),
 		context:         context,
 		historyV2Mgr:    historyV2Mgr,
 		logger:          logger,

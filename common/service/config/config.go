@@ -165,6 +165,8 @@ type (
 		MaxQPS dynamicconfig.IntPropertyFn
 		// ValidSearchAttributes is legal indexed keys that can be used in list APIs
 		ValidSearchAttributes dynamicconfig.MapPropertyFn
+		// AdvancedVisibilityWritingMode mode for advanced visibility
+		AdvancedVisibilityWritingMode dynamicconfig.StringPropertyFn
 	}
 
 	// Cassandra contains configuration to connect to Cassandra cluster

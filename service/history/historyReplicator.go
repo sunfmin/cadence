@@ -122,7 +122,7 @@ func newHistoryReplicator(
 		historyCache:      historyCache,
 		domainCache:       domainCache,
 		historySerializer: persistence.NewPayloadSerializer(),
-		clusterMetadata:   shard.GetService().GetClusterMetadata(),
+		clusterMetadata:   shard.GetClusterMetadata(),
 		metricsClient:     shard.GetMetricsClient(),
 		logger:            logger.WithTags(tag.ComponentHistoryReplicator),
 

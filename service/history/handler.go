@@ -24,60 +24,44 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pborman/uuid"
+	"go.uber.org/yarpc/yarpcerrors"
+
 	"github.com/uber/cadence/.gen/go/health"
 	"github.com/uber/cadence/.gen/go/health/metaserver"
 	hist "github.com/uber/cadence/.gen/go/history"
 	"github.com/uber/cadence/.gen/go/history/historyserviceserver"
 	r "github.com/uber/cadence/.gen/go/replicator"
 	gen "github.com/uber/cadence/.gen/go/shared"
-	hc "github.com/uber/cadence/client/history"
-	"github.com/uber/cadence/client/matching"
 	"github.com/uber/cadence/common"
-	"github.com/uber/cadence/common/cache"
 	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/log/tag"
 	"github.com/uber/cadence/common/membership"
-	"github.com/uber/cadence/common/messaging"
 	"github.com/uber/cadence/common/metrics"
 	"github.com/uber/cadence/common/persistence"
 	"github.com/uber/cadence/common/quotas"
 	"github.com/uber/cadence/common/service"
-	"github.com/uber/cadence/service/worker/replicator"
-	"go.uber.org/cadence/.gen/go/cadence/workflowserviceclient"
-	"go.uber.org/yarpc/yarpcerrors"
 )
 
 // Handler - Thrift handler interface for history service
 type (
 	Handler struct {
-		shardManager            persistence.ShardManager
-		metadataMgr             persistence.MetadataManager
-		visibilityMgr           persistence.VisibilityManager
-		historyV2Mgr            persistence.HistoryManager
-		executionMgrFactory     persistence.ExecutionManagerFactory
-		domainCache             cache.DomainCache
-		historyServiceClient    hc.Client
-		matchingServiceClient   matching.Client
-		publicClient            workflowserviceclient.Interface
-		hServiceResolver        membership.ServiceResolver
-		controller              *shardController
-		tokenSerializer         common.TaskTokenSerializer
-		startWG                 sync.WaitGroup
-		metricsClient           metrics.Client
-		config                  *Config
-		historyEventNotifier    historyEventNotifier
-		publisher               messaging.Producer
-		rateLimiter             quotas.Limiter
-		replicationTaskFetchers *ReplicationTaskFetchers
-		domainReplicator        replicator.DomainReplicator
 		service.Service
+		config     *Config
+		hostInfo   *membership.HostInfo
+		controller *shardController
+
+		metricsClient   metrics.Client
+		tokenSerializer common.TaskTokenSerializer
+		rateLimiter     quotas.Limiter
+
+		startWG sync.WaitGroup
 	}
 )
 
 var _ historyserviceserver.Interface = (*Handler)(nil)
-var _ EngineFactory = (*Handler)(nil)
 
 var (
 	errDomainNotSet            = &gen.BadRequestError{Message: "Domain not set on request."}
@@ -93,40 +77,40 @@ var (
 
 // NewHandler creates a thrift handler for the history service
 func NewHandler(
-	sVice service.Service,
+	serviceBase service.Service,
 	config *Config,
-	shardManager persistence.ShardManager,
-	metadataMgr persistence.MetadataManager,
-	visibilityMgr persistence.VisibilityManager,
-	historyV2Mgr persistence.HistoryManager,
-	executionMgrFactory persistence.ExecutionManagerFactory,
-	domainCache cache.DomainCache,
-	publicClient workflowserviceclient.Interface,
-) *Handler {
-	domainReplicator := replicator.NewDomainReplicator(metadataMgr, sVice.GetLogger())
+) (*Handler, error) {
+
+	shardController, err := newShardController(
+		serviceBase,
+		config,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	hostInfo, err := serviceBase.GetHostInfo()
+	if err != nil {
+		return nil, err
+	}
 
 	handler := &Handler{
-		Service:             sVice,
-		config:              config,
-		shardManager:        shardManager,
-		metadataMgr:         metadataMgr,
-		historyV2Mgr:        historyV2Mgr,
-		visibilityMgr:       visibilityMgr,
-		executionMgrFactory: executionMgrFactory,
-		domainCache:         domainCache,
-		tokenSerializer:     common.NewJSONTaskTokenSerializer(),
+		Service:         serviceBase,
+		config:          config,
+		hostInfo:        hostInfo,
+		controller:      shardController,
+		metricsClient:   serviceBase.GetMetricsClient(),
+		tokenSerializer: common.NewJSONTaskTokenSerializer(),
 		rateLimiter: quotas.NewDynamicRateLimiter(
 			func() float64 {
 				return float64(config.RPS())
 			},
 		),
-		publicClient:     publicClient,
-		domainReplicator: domainReplicator,
 	}
 
 	// prevent us from trying to serve requests before shard controller is started and ready
 	handler.startWG.Add(1)
-	return handler
+	return handler, nil
 }
 
 // RegisterHandler register this handler, must be called before Start()
@@ -136,83 +120,17 @@ func (h *Handler) RegisterHandler() {
 }
 
 // Start starts the handler
-func (h *Handler) Start() error {
+func (h *Handler) Start() {
 	h.Service.Start()
-
-	h.domainCache = cache.NewDomainCache(h.metadataMgr, h.GetClusterMetadata(), h.GetMetricsClient(), h.GetLogger())
-	h.domainCache.Start()
-
-	matchingClient, err := h.GetClientBean().GetMatchingClient(h.domainCache.GetDomainName)
-	if err != nil {
-		return err
-	}
-
-	h.matchingServiceClient = matching.NewRetryableClient(
-		matchingClient,
-		common.CreateMatchingServiceRetryPolicy(),
-		common.IsWhitelistServiceTransientError,
-	)
-
-	h.historyServiceClient = hc.NewRetryableClient(
-		h.GetClientBean().GetHistoryClient(),
-		common.CreateHistoryServiceRetryPolicy(),
-		common.IsWhitelistServiceTransientError,
-	)
-
-	hServiceResolver, err1 := h.GetMembershipMonitor().GetResolver(common.HistoryServiceName)
-	if err1 != nil {
-		h.Service.GetLogger().Fatal("Unable to get history service resolver", tag.Error(err1))
-	}
-	h.hServiceResolver = hServiceResolver
-
-	if h.GetClusterMetadata().IsGlobalDomainEnabled() {
-		var err error
-		h.publisher, err = h.GetMessagingClient().NewProducerWithClusterName(h.GetClusterMetadata().GetCurrentClusterName())
-		if err != nil {
-			h.GetLogger().Fatal("Creating kafka producer failed", tag.Error(err))
-		}
-	}
-
-	h.replicationTaskFetchers = NewReplicationTaskFetchers(
-		h.GetLogger(),
-		h.GetClusterMetadata().GetReplicationConsumerConfig(),
-		h.Service.GetClusterMetadata(),
-		h.Service.GetClientBean())
-
-	h.replicationTaskFetchers.Start()
-
-	h.controller = newShardController(h.Service, h.GetHostInfo(), hServiceResolver, h.shardManager, h.historyV2Mgr,
-		h.domainCache, h.executionMgrFactory, h, h.config, h.GetLogger(), h.GetMetricsClient())
-	h.metricsClient = h.GetMetricsClient()
-	h.historyEventNotifier = newHistoryEventNotifier(h.Service.GetTimeSource(), h.GetMetricsClient(), h.config.GetShardID)
-	// events notifier must starts before controller
-	h.historyEventNotifier.Start()
 	h.controller.Start()
 
 	h.startWG.Done()
-	return nil
 }
 
 // Stop stops the handler
 func (h *Handler) Stop() {
-	h.replicationTaskFetchers.Stop()
-	h.domainCache.Stop()
 	h.controller.Stop()
-	h.shardManager.Close()
-	if h.historyV2Mgr != nil {
-		h.historyV2Mgr.Close()
-	}
-	h.executionMgrFactory.Close()
-	h.metadataMgr.Close()
-	h.visibilityMgr.Close()
 	h.Service.Stop()
-	h.historyEventNotifier.Stop()
-}
-
-// CreateEngine is implementation for HistoryEngineFactory used for creating the engine instance for shard
-func (h *Handler) CreateEngine(context ShardContext) Engine {
-	return NewEngineWithShardContext(context, h.visibilityMgr, h.matchingServiceClient, h.historyServiceClient,
-		h.publicClient, h.historyEventNotifier, h.publisher, h.config, h.replicationTaskFetchers, h.domainReplicator)
 }
 
 // Health is for health check
@@ -667,22 +585,20 @@ func (h *Handler) DescribeHistoryHost(
 	defer log.CapturePanic(h.GetLogger(), &retError)
 	h.startWG.Wait()
 
-	numOfItemsInCacheByID, numOfItemsInCacheByName := h.domainCache.GetCacheSize()
-	status := ""
-	if h.controller.isStarted > 0 {
-		status += "started,"
-	} else {
-		status += "not started,"
-	}
-	if h.controller.isStopped > 0 {
-		status += "stopped,"
-	} else {
-		status += "not stopped,"
-	}
-	if h.controller.isStopping {
-		status += "stopping"
-	} else {
-		status += "not stopping"
+	numOfItemsInCacheByID, numOfItemsInCacheByName := h.GetDomainCache().GetCacheSize()
+	status := atomic.LoadInt32(&h.controller.status)
+	statusStr := ""
+	switch status {
+	case common.DaemonStatusInitialized:
+		statusStr = "initialized"
+	case common.DaemonStatusStarted:
+		statusStr = "started"
+	case common.DaemonStatusStopped:
+		statusStr = "stopped"
+	default:
+		return nil, &gen.InternalServiceError{
+			Message: fmt.Sprintf("unknown status %v", status),
+		}
 	}
 
 	resp = &gen.DescribeHistoryHostResponse{
@@ -692,8 +608,8 @@ func (h *Handler) DescribeHistoryHost(
 			NumOfItemsInCacheByID:   &numOfItemsInCacheByID,
 			NumOfItemsInCacheByName: &numOfItemsInCacheByName,
 		},
-		ShardControllerStatus: &status,
-		Address:               common.StringPtr(h.GetHostInfo().GetAddress()),
+		ShardControllerStatus: common.StringPtr(statusStr),
+		Address:               common.StringPtr(h.hostInfo.GetAddress()),
 	}
 	return resp, nil
 }
@@ -703,7 +619,11 @@ func (h *Handler) RemoveTask(
 	ctx context.Context,
 	request *gen.RemoveTaskRequest,
 ) (retError error) {
-	executionMgr, err := h.executionMgrFactory.NewExecutionManager(int(request.GetShardID()))
+
+	defer log.CapturePanic(h.GetLogger(), &retError)
+	h.startWG.Wait()
+
+	executionMgr, err := h.GetExecutionManager(int(request.GetShardID()))
 	if err != nil {
 		return err
 	}
@@ -1581,11 +1501,11 @@ func (h *Handler) convertError(err error) error {
 	switch err.(type) {
 	case *persistence.ShardOwnershipLostError:
 		shardID := err.(*persistence.ShardOwnershipLostError).ShardID
-		info, err := h.hServiceResolver.Lookup(string(shardID))
+		info, err := h.GetHistoryServiceResolver().Lookup(string(shardID))
 		if err == nil {
-			return createShardOwnershipLostError(h.GetHostInfo().GetAddress(), info.GetAddress())
+			return createShardOwnershipLostError(h.hostInfo.GetAddress(), info.GetAddress())
 		}
-		return createShardOwnershipLostError(h.GetHostInfo().GetAddress(), "")
+		return createShardOwnershipLostError(h.hostInfo.GetAddress(), "")
 	case *persistence.WorkflowExecutionAlreadyStartedError:
 		err := err.(*persistence.WorkflowExecutionAlreadyStartedError)
 		return &gen.InternalServiceError{Message: err.Msg}

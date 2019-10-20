@@ -43,14 +43,14 @@ var _ matchingserviceserver.Interface = (*Handler)(nil)
 
 // Handler - Thrift handler inteface for history service
 type Handler struct {
-	taskPersistence persistence.TaskManager
-	metadataMgr     persistence.MetadataManager
-	engine          Engine
-	config          *Config
-	metricsClient   metrics.Client
-	startWG         sync.WaitGroup
-	domainCache     cache.DomainCache
-	rateLimiter     quotas.Limiter
+	taskMgr       persistence.TaskManager
+	metadataMgr   persistence.MetadataManager
+	engine        Engine
+	config        *Config
+	metricsClient metrics.Client
+	startWG       sync.WaitGroup
+	domainCache   cache.DomainCache
+	rateLimiter   quotas.Limiter
 	service.Service
 }
 
@@ -59,15 +59,29 @@ var (
 )
 
 // NewHandler creates a thrift handler for the history service
-func NewHandler(sVice service.Service, config *Config, taskPersistence persistence.TaskManager, metadataMgr persistence.MetadataManager) *Handler {
+func NewHandler(
+	serviceBase service.Service,
+	config *Config,
+) *Handler {
 	handler := &Handler{
-		Service:         sVice,
-		taskPersistence: taskPersistence,
-		metadataMgr:     metadataMgr,
-		config:          config,
+		Service:       serviceBase,
+		config:        config,
+		domainCache:   serviceBase.GetDomainCache(),
+		metricsClient: serviceBase.GetMetricsClient(),
+		taskMgr:       serviceBase.GetTaskManager(),
+		metadataMgr:   serviceBase.GetMetadataManager(),
 		rateLimiter: quotas.NewDynamicRateLimiter(func() float64 {
 			return float64(config.RPS())
 		}),
+		engine: NewEngine(
+			serviceBase.GetTaskManager(),
+			serviceBase.GetHistoryClient(),
+			serviceBase.GetMatchingClient(),
+			config,
+			serviceBase.GetLogger(),
+			serviceBase.GetMetricsClient(),
+			serviceBase.GetDomainCache(),
+		),
 	}
 	// prevent us from trying to serve requests before matching engine is started and ready
 	handler.startWG.Add(1)
@@ -80,36 +94,13 @@ func (h *Handler) RegisterHandler() {
 }
 
 // Start starts the handler
-func (h *Handler) Start() error {
-	h.Service.Start()
-
-	h.domainCache = cache.NewDomainCache(h.metadataMgr, h.GetClusterMetadata(), h.GetMetricsClient(), h.GetLogger())
-	h.domainCache.Start()
-	h.metricsClient = h.Service.GetMetricsClient()
-	client, err := h.Service.GetClientBean().GetMatchingClient(h.domainCache.GetDomainName)
-	if err != nil {
-		return err
-	}
-	h.engine = NewEngine(
-		h.taskPersistence,
-		h.GetClientBean().GetHistoryClient(),
-		client,
-		h.config,
-		h.Service.GetLogger(),
-		h.Service.GetMetricsClient(),
-		h.domainCache,
-	)
+func (h *Handler) Start() {
 	h.startWG.Done()
-	return nil
 }
 
 // Stop stops the handler
 func (h *Handler) Stop() {
 	h.engine.Stop()
-	h.domainCache.Stop()
-	h.taskPersistence.Close()
-	h.metadataMgr.Close()
-	h.Service.Stop()
 }
 
 // Health is for health check

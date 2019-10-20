@@ -40,7 +40,7 @@ func verifyTaskVersion(
 	task interface{},
 ) (bool, error) {
 
-	if !shard.GetService().GetClusterMetadata().IsGlobalDomainEnabled() {
+	if !shard.GetClusterMetadata().IsGlobalDomainEnabled() {
 		return true, nil
 	}
 

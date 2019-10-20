@@ -206,13 +206,17 @@ func (s *server) startService() common.Daemon {
 
 	switch s.name {
 	case frontendService:
-		daemon = frontend.NewService(&params)
+		daemon, err = frontend.NewService(&params)
 	case historyService:
-		daemon = history.NewService(&params)
+		daemon, err = history.NewService(&params)
 	case matchingService:
-		daemon = matching.NewService(&params)
+		daemon, err = matching.NewService(&params)
 	case workerService:
-		daemon = worker.NewService(&params)
+		daemon, err = worker.NewService(&params)
+	}
+
+	if err != nil {
+		log.Fatalf("failed to initialize serice daemon: %v", err)
 	}
 
 	go execute(daemon, s.doneC)

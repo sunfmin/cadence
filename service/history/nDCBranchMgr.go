@@ -69,7 +69,7 @@ func newNDCBranchMgr(
 	return &nDCBranchMgrImpl{
 		shard:           shard,
 		domainCache:     shard.GetDomainCache(),
-		clusterMetadata: shard.GetService().GetClusterMetadata(),
+		clusterMetadata: shard.GetClusterMetadata(),
 		historyV2Mgr:    shard.GetHistoryManager(),
 
 		context:      context,

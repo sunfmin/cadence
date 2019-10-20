@@ -424,11 +424,11 @@ func (t *timerQueueProcessorBase) processDeleteHistoryEvent(
 	if err != nil {
 		return err
 	}
-	clusterConfiguredForHistoryArchival := t.shard.GetService().GetArchivalMetadata().GetHistoryConfig().ClusterConfiguredForArchival()
+	clusterConfiguredForHistoryArchival := t.shard.GetArchivalMetadata().GetHistoryConfig().ClusterConfiguredForArchival()
 	domainConfiguredForHistoryArchival := domainCacheEntry.GetConfig().HistoryArchivalStatus == workflow.ArchivalStatusEnabled
 	archiveHistory := clusterConfiguredForHistoryArchival && domainConfiguredForHistoryArchival
 
-	clusterConfiguredForVisibilityArchival := t.shard.GetService().GetArchivalMetadata().GetVisibilityConfig().ClusterConfiguredForArchival()
+	clusterConfiguredForVisibilityArchival := t.shard.GetArchivalMetadata().GetVisibilityConfig().ClusterConfiguredForArchival()
 	domainConfiguredForVisibilityArchival := domainCacheEntry.GetConfig().VisibilityArchivalStatus == workflow.ArchivalStatusEnabled
 	archiveVisibility := clusterConfiguredForVisibilityArchival && domainConfiguredForVisibilityArchival
 

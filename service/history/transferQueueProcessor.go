@@ -86,10 +86,10 @@ func newTransferQueueProcessor(
 ) *transferQueueProcessorImpl {
 
 	logger = logger.WithTags(tag.ComponentTransferQueue)
-	currentClusterName := shard.GetService().GetClusterMetadata().GetCurrentClusterName()
+	currentClusterName := shard.GetClusterMetadata().GetCurrentClusterName()
 	taskAllocator := newTaskAllocator(shard)
 	standbyTaskProcessors := make(map[string]*transferQueueStandbyProcessorImpl)
-	for clusterName, info := range shard.GetService().GetClusterMetadata().GetAllClusterInfo() {
+	for clusterName, info := range shard.GetClusterMetadata().GetAllClusterInfo() {
 		if !info.Enabled {
 			continue
 		}
@@ -98,7 +98,7 @@ func newTransferQueueProcessor(
 			historyRereplicator := xdc.NewHistoryRereplicator(
 				currentClusterName,
 				shard.GetDomainCache(),
-				shard.GetService().GetClientBean().GetRemoteAdminClient(clusterName),
+				shard.GetRemoteAdminClient(clusterName),
 				func(ctx context.Context, request *h.ReplicateRawEventsRequest) error {
 					return historyService.ReplicateRawEvents(ctx, request)
 				},
@@ -108,11 +108,11 @@ func newTransferQueueProcessor(
 			)
 			nDCHistoryResender := xdc.NewNDCHistoryResender(
 				shard.GetDomainCache(),
-				shard.GetService().GetClientBean().GetRemoteAdminClient(clusterName),
+				shard.GetRemoteAdminClient(clusterName),
 				func(ctx context.Context, request *h.ReplicateEventsV2Request) error {
 					return historyService.ReplicateEventsV2(ctx, request)
 				},
-				shard.GetService().GetPayloadSerializer(),
+				shard.GetPayloadSerializer(),
 				logger,
 			)
 			standbyTaskProcessors[clusterName] = newTransferQueueStandbyProcessor(
@@ -130,7 +130,7 @@ func newTransferQueueProcessor(
 	}
 
 	return &transferQueueProcessorImpl{
-		isGlobalDomainEnabled: shard.GetService().GetClusterMetadata().IsGlobalDomainEnabled(),
+		isGlobalDomainEnabled: shard.GetClusterMetadata().IsGlobalDomainEnabled(),
 		currentClusterName:    currentClusterName,
 		shard:                 shard,
 		taskAllocator:         taskAllocator,
@@ -214,7 +214,7 @@ func (t *transferQueueProcessorImpl) FailoverDomain(
 
 	minLevel := t.shard.GetTransferClusterAckLevel(t.currentClusterName)
 	standbyClusterName := t.currentClusterName
-	for clusterName, info := range t.shard.GetService().GetClusterMetadata().GetAllClusterInfo() {
+	for clusterName, info := range t.shard.GetClusterMetadata().GetAllClusterInfo() {
 		if !info.Enabled {
 			continue
 		}

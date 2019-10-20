@@ -167,6 +167,7 @@ func newTimerQueueFailoverAckMgr(
 		maxQueryLevel:       maxLevel,
 		isReadFinished:      false,
 		finishedChan:        make(chan struct{}, 1),
+		clusterName:         shard.GetClusterMetadata().GetCurrentClusterName(),
 	}
 
 	return timerQueueAckMgrImpl

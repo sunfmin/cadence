@@ -97,7 +97,7 @@ func newTimerQueueStandbyProcessor(
 	processor := &timerQueueStandbyProcessorImpl{
 		shard:           shard,
 		config:          shard.GetConfig(),
-		clusterMetadata: shard.GetService().GetClusterMetadata(),
+		clusterMetadata: shard.GetClusterMetadata(),
 		historyService:  historyService,
 		cache:           historyService.historyCache,
 		timerTaskFilter: timerTaskFilter,

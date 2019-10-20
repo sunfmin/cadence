@@ -25,14 +25,12 @@ import (
 
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/archiver"
-	"github.com/uber/cadence/common/cache"
 	"github.com/uber/cadence/common/definition"
-	"github.com/uber/cadence/common/log/loggerimpl"
+	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/log/tag"
-	"github.com/uber/cadence/common/metrics"
 	"github.com/uber/cadence/common/persistence"
-	espersistence "github.com/uber/cadence/common/persistence/elasticsearch"
-	persistencefactory "github.com/uber/cadence/common/persistence/persistence-factory"
+	persistenceClient "github.com/uber/cadence/common/persistence/client"
+	persistenceElasticSearch "github.com/uber/cadence/common/persistence/elasticsearch"
 	"github.com/uber/cadence/common/service"
 	"github.com/uber/cadence/common/service/config"
 	"github.com/uber/cadence/common/service/dynamicconfig"
@@ -288,128 +286,130 @@ func (config *Config) GetShardID(workflowID string) int {
 
 // Service represents the cadence-history service
 type Service struct {
-	stopC         chan struct{}
-	params        *service.BootstrapParams
-	config        *Config
-	metricsClient metrics.Client
+	service.Service
+	config *Config
+
+	stopC chan struct{}
 }
 
 // NewService builds a new cadence-history service
-func NewService(params *service.BootstrapParams) common.Daemon {
-	config := NewConfig(dynamicconfig.NewCollection(params.DynamicConfig, params.Logger),
+func NewService(
+	params *service.BootstrapParams,
+) (service.Service, error) {
+
+	serviceConfig := NewConfig(
+		dynamicconfig.NewCollection(params.DynamicConfig, params.Logger),
 		params.PersistenceConfig.NumHistoryShards,
 		params.PersistenceConfig.DefaultStoreType(),
-		params.PersistenceConfig.IsAdvancedVisibilityConfigExist())
-	params.ThrottledLogger = loggerimpl.NewThrottledLogger(params.Logger, config.ThrottledLogRPS)
-	params.UpdateLoggerWithServiceName(common.HistoryServiceName)
-	return &Service{
-		params: params,
-		stopC:  make(chan struct{}),
-		config: config,
+		params.PersistenceConfig.IsAdvancedVisibilityConfigExist(),
+	)
+
+	params.PersistenceConfig.SetMaxQPS(params.PersistenceConfig.DefaultStore, serviceConfig.PersistenceMaxQPS())
+	params.PersistenceConfig.HistoryMaxConns = serviceConfig.HistoryMgrNumConns()
+	params.PersistenceConfig.VisibilityConfig = &config.VisibilityConfig{
+		VisibilityOpenMaxQPS:            serviceConfig.VisibilityOpenMaxQPS,
+		VisibilityClosedMaxQPS:          serviceConfig.VisibilityClosedMaxQPS,
+		EnableSampling:                  serviceConfig.EnableVisibilitySampling,
+		EnableReadFromClosedExecutionV2: serviceConfig.EnableReadFromClosedExecutionV2,
+		AdvancedVisibilityWritingMode:   serviceConfig.AdvancedVisibilityWritingMode,
 	}
+
+	baseService, err := service.NewService(
+		params,
+		common.HistoryServiceName,
+		serviceConfig.ThrottledLogRPS,
+		func(
+			persistenceBean persistenceClient.Bean,
+			logger log.Logger,
+		) (persistence.VisibilityManager, error) {
+
+			logger.Info("elastic search config", tag.ESConfig(serviceConfig))
+
+			if params.ESConfig == nil {
+				return persistence.NewVisibilityManagerWrapper(
+					persistenceBean.GetVisibilityManager(),
+					nil,
+					dynamicconfig.GetBoolPropertyFnFilteredByDomain(false), // history visibility never read,
+					serviceConfig.AdvancedVisibilityWritingMode,
+				), nil
+			}
+
+			visibilityProducer, err := params.MessagingClient.NewProducer(common.VisibilityAppName)
+			if err != nil {
+				return nil, err
+			}
+			return persistence.NewVisibilityManagerWrapper(
+				persistenceBean.GetVisibilityManager(),
+				persistenceElasticSearch.NewESVisibilityManager(
+					"",
+					nil,
+					nil,
+					visibilityProducer,
+					params.MetricsClient,
+					logger,
+				),
+				dynamicconfig.GetBoolPropertyFnFilteredByDomain(false), // history visibility never read,
+				serviceConfig.AdvancedVisibilityWritingMode,
+			), nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Service{
+		Service: baseService,
+		config:  serviceConfig,
+		stopC:   make(chan struct{}),
+	}, nil
 }
 
 // Start starts the service
 func (s *Service) Start() {
 
-	var params = s.params
-	var log = params.Logger
-
-	log.Info("elastic search config", tag.ESConfig(params.ESConfig))
-	log.Info("starting", tag.Service(common.HistoryServiceName))
-
-	base := service.New(params)
-
-	s.metricsClient = base.GetMetricsClient()
-
-	pConfig := params.PersistenceConfig
-	pConfig.HistoryMaxConns = s.config.HistoryMgrNumConns()
-	pConfig.SetMaxQPS(pConfig.DefaultStore, s.config.PersistenceMaxQPS())
-	pConfig.VisibilityConfig = &config.VisibilityConfig{
-		VisibilityOpenMaxQPS:            s.config.VisibilityOpenMaxQPS,
-		VisibilityClosedMaxQPS:          s.config.VisibilityClosedMaxQPS,
-		EnableSampling:                  s.config.EnableVisibilitySampling,
-		EnableReadFromClosedExecutionV2: s.config.EnableReadFromClosedExecutionV2,
-	}
-	pFactory := persistencefactory.New(&pConfig, params.ClusterMetadata.GetCurrentClusterName(), s.metricsClient, log)
-
-	shardMgr, err := pFactory.NewShardManager()
-	if err != nil {
-		log.Fatal("failed to create shard manager", tag.Error(err))
-	}
-
-	metadata, err := pFactory.NewMetadataManager()
-	if err != nil {
-		log.Fatal("failed to create metadata manager", tag.Error(err))
-	}
-
-	visibility, err := pFactory.NewVisibilityManager()
-	if err != nil {
-		log.Fatal("failed to create visibility manager", tag.Error(err))
-	}
-
-	var esVisibility persistence.VisibilityManager
-	if params.ESConfig != nil {
-		visibilityProducer, err := s.params.MessagingClient.NewProducer(common.VisibilityAppName)
-		if err != nil {
-			log.Fatal("Creating visibility producer failed", tag.Error(err))
-		}
-		esVisibility = espersistence.NewESVisibilityManager("", nil, nil, visibilityProducer,
-			s.metricsClient, log)
-	}
-	visibility = persistence.NewVisibilityManagerWrapper(
-		visibility,
-		esVisibility,
-		dynamicconfig.GetBoolPropertyFnFilteredByDomain(false), // history visibility never read
-		s.config.AdvancedVisibilityWritingMode,
-	)
-
-	historyV2, err := pFactory.NewHistoryV2Manager()
-	if err != nil {
-		log.Fatal("Creating historyV2 manager persistence failed", tag.Error(err))
-	}
-
-	domainCache := cache.NewDomainCache(metadata, base.GetClusterMetadata(), base.GetMetricsClient(), base.GetLogger())
+	logger := s.GetLogger()
+	logger.Info("history starting", tag.Service(common.HistoryServiceName))
 
 	historyArchiverBootstrapContainer := &archiver.HistoryBootstrapContainer{
-		HistoryV2Manager: historyV2,
-		Logger:           base.GetLogger(),
-		MetricsClient:    base.GetMetricsClient(),
-		ClusterMetadata:  base.GetClusterMetadata(),
-		DomainCache:      domainCache,
+		HistoryV2Manager: s.GetHistoryManager(),
+		Logger:           s.GetLogger(),
+		MetricsClient:    s.GetMetricsClient(),
+		ClusterMetadata:  s.GetClusterMetadata(),
+		DomainCache:      s.GetDomainCache(),
 	}
 	visibilityArchvierBootstrapContainer := &archiver.VisibilityBootstrapContainer{
-		Logger:          base.GetLogger(),
-		MetricsClient:   base.GetMetricsClient(),
-		ClusterMetadata: base.GetClusterMetadata(),
-		DomainCache:     domainCache,
+		Logger:          s.GetLogger(),
+		MetricsClient:   s.GetMetricsClient(),
+		ClusterMetadata: s.GetClusterMetadata(),
+		DomainCache:     s.GetDomainCache(),
 	}
-	err = params.ArchiverProvider.RegisterBootstrapContainer(common.HistoryServiceName, historyArchiverBootstrapContainer, visibilityArchvierBootstrapContainer)
+	err := s.GetArchiverProvider().RegisterBootstrapContainer(
+		common.HistoryServiceName,
+		historyArchiverBootstrapContainer,
+		visibilityArchvierBootstrapContainer,
+	)
 	if err != nil {
-		log.Fatal("Failed to register archiver bootstrap container", tag.Error(err))
+		logger.Fatal("fail to register archiver bootstrap container", tag.Error(err))
 	}
 
-	handler := NewHandler(base, s.config, shardMgr, metadata, visibility, historyV2, pFactory, domainCache, params.PublicClient)
+	handler, err := NewHandler(s, s.config)
+	if err != nil {
+		logger.Fatal("fail to create history handler", tag.Error(err))
+	}
 	handler.RegisterHandler()
 
 	// must start base service first
-	base.Start()
-	err = handler.Start()
-	if err != nil {
-		log.Fatal("History handler failed to start", tag.Error(err))
-	}
+	s.Service.Start()
+	handler.Start()
 
-	log.Info("started", tag.Service(common.HistoryServiceName))
+	logger.Info("history started", tag.Service(common.HistoryServiceName))
 
 	<-s.stopC
-	base.Stop()
+	s.Service.Stop()
 }
 
 // Stop stops the service
 func (s *Service) Stop() {
-	select {
-	case s.stopC <- struct{}{}:
-	default:
-	}
-	s.params.Logger.Info("stopped", tag.Service(common.HistoryServiceName))
+	close(s.stopC)
+	s.GetLogger().Info("history stopped", tag.Service(common.HistoryServiceName))
 }

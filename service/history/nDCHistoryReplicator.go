@@ -114,7 +114,7 @@ func newNDCHistoryReplicator(
 	transactionMgr := newNDCTransactionMgr(shard, historyCache, eventsReapplier, logger)
 	replicator := &nDCHistoryReplicatorImpl{
 		shard:             shard,
-		clusterMetadata:   shard.GetService().GetClusterMetadata(),
+		clusterMetadata:   shard.GetClusterMetadata(),
 		historyV2Mgr:      shard.GetHistoryManager(),
 		historySerializer: persistence.NewPayloadSerializer(),
 		metricsClient:     shard.GetMetricsClient(),

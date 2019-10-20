@@ -36,8 +36,6 @@ import (
 	h "github.com/uber/cadence/.gen/go/history"
 	r "github.com/uber/cadence/.gen/go/replicator"
 	workflow "github.com/uber/cadence/.gen/go/shared"
-	hc "github.com/uber/cadence/client/history"
-	"github.com/uber/cadence/client/matching"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/cache"
 	"github.com/uber/cadence/common/clock"
@@ -104,34 +102,38 @@ type (
 	}
 
 	historyEngineImpl struct {
-		currentClusterName        string
-		shard                     ShardContext
-		timeSource                clock.TimeSource
-		decisionHandler           decisionHandler
-		clusterMetadata           cluster.Metadata
-		historyV2Mgr              persistence.HistoryManager
-		executionManager          persistence.ExecutionManager
-		visibilityMgr             persistence.VisibilityManager
-		txProcessor               transferQueueProcessor
-		timerProcessor            timerQueueProcessor
-		taskAllocator             taskAllocator
-		replicator                *historyReplicator
-		nDCReplicator             nDCHistoryReplicator
-		nDCactivityReplicator     nDCActivityReplicator
-		replicatorProcessor       ReplicatorQueueProcessor
+		currentClusterName string
+		shard              ShardContext
+		config             *Config
+		timeSource         clock.TimeSource
+		clusterMetadata    cluster.Metadata
+		historyV2Mgr       persistence.HistoryManager
+		executionManager   persistence.ExecutionManager
+		visibilityMgr      persistence.VisibilityManager
+		metricsClient      metrics.Client
+		archivalClient     warchiver.Client
+		publicClient       workflowserviceclient.Interface
+		tokenSerializer    common.TaskTokenSerializer
+
 		historyEventNotifier      historyEventNotifier
-		tokenSerializer           common.TaskTokenSerializer
-		historyCache              *historyCache
-		metricsClient             metrics.Client
-		logger                    log.Logger
-		throttledLogger           log.Logger
-		config                    *Config
-		archivalClient            warchiver.Client
+		decisionHandler           decisionHandler
+		replicator                *historyReplicator
+		nDCHistoryReplicator      nDCHistoryReplicator
+		nDCActivityReplicator     nDCActivityReplicator
 		resetor                   workflowResetor
 		workflowResetter          workflowResetter
 		replicationTaskProcessors []*ReplicationTaskProcessor
-		publicClient              workflowserviceclient.Interface
 		eventsReapplier           nDCEventsReapplier
+
+		taskAllocator       taskAllocator
+		replicatorProcessor ReplicatorQueueProcessor
+		txProcessor         transferQueueProcessor
+		timerProcessor      timerQueueProcessor
+
+		logger          log.Logger
+		throttledLogger log.Logger
+
+		historyCache *historyCache
 	}
 )
 
@@ -182,59 +184,70 @@ var (
 // NewEngineWithShardContext creates an instance of history engine
 func NewEngineWithShardContext(
 	shard ShardContext,
-	visibilityMgr persistence.VisibilityManager,
-	matching matching.Client,
-	historyClient hc.Client,
-	publicClient workflowserviceclient.Interface,
 	historyEventNotifier historyEventNotifier,
 	publisher messaging.Producer,
-	config *Config,
-	replicationTaskFetchers *ReplicationTaskFetchers,
 	domainReplicator replicator.DomainReplicator,
+	replicationTaskFetchers *ReplicationTaskFetchers,
 ) Engine {
-	currentClusterName := shard.GetService().GetClusterMetadata().GetCurrentClusterName()
 
 	logger := shard.GetLogger()
-	executionManager := shard.GetExecutionManager()
-	historyV2Manager := shard.GetHistoryManager()
 	historyCache := newHistoryCache(shard)
 	historyEngImpl := &historyEngineImpl{
-		currentClusterName:   currentClusterName,
-		shard:                shard,
-		clusterMetadata:      shard.GetClusterMetadata(),
-		timeSource:           shard.GetTimeSource(),
-		historyV2Mgr:         historyV2Manager,
-		executionManager:     executionManager,
-		visibilityMgr:        visibilityMgr,
-		tokenSerializer:      common.NewJSONTaskTokenSerializer(),
-		historyCache:         historyCache,
-		logger:               logger.WithTags(tag.ComponentHistoryEngine),
-		throttledLogger:      shard.GetThrottledLogger().WithTags(tag.ComponentHistoryEngine),
-		metricsClient:        shard.GetMetricsClient(),
-		historyEventNotifier: historyEventNotifier,
-		config:               config,
+		currentClusterName: shard.GetClusterMetadata().GetCurrentClusterName(),
+		shard:              shard,
+		config:             shard.GetConfig(),
+		timeSource:         shard.GetTimeSource(),
+		clusterMetadata:    shard.GetClusterMetadata(),
+		historyV2Mgr:       shard.GetHistoryManager(),
+		executionManager:   shard.GetExecutionManager(),
+		visibilityMgr:      shard.GetVisibilityManager(),
+		metricsClient:      shard.GetMetricsClient(),
 		archivalClient: warchiver.NewClient(
 			shard.GetMetricsClient(),
 			logger,
-			publicClient,
+			shard.GetPublicClient(),
 			shard.GetConfig().NumArchiveSystemWorkflows,
 			shard.GetConfig().ArchiveRequestRPS,
-			shard.GetService().GetArchiverProvider(),
+			shard.GetArchiverProvider(),
 		),
-		publicClient: publicClient,
+		publicClient:    shard.GetPublicClient(),
+		tokenSerializer: common.NewJSONTaskTokenSerializer(),
+
+		historyEventNotifier: historyEventNotifier,
+
+		logger:          logger.WithTags(tag.ComponentHistoryEngine),
+		throttledLogger: shard.GetThrottledLogger().WithTags(tag.ComponentHistoryEngine),
+
+		historyCache: historyCache,
 	}
 
-	historyEngImpl.txProcessor = newTransferQueueProcessor(shard, historyEngImpl, visibilityMgr, matching, historyClient, logger)
-	historyEngImpl.timerProcessor = newTimerQueueProcessor(shard, historyEngImpl, matching, logger)
-	historyEngImpl.eventsReapplier = newNDCEventsReapplier(shard.GetMetricsClient(), logger)
+	historyEngImpl.txProcessor = newTransferQueueProcessor(
+		shard,
+		historyEngImpl,
+		shard.GetVisibilityManager(),
+		shard.GetMatchingClient(),
+		shard.GetHistoryClient(),
+		logger,
+	)
+	historyEngImpl.timerProcessor = newTimerQueueProcessor(
+		shard,
+		historyEngImpl,
+		shard.GetMatchingClient(),
+		logger,
+	)
+	historyEngImpl.eventsReapplier = newNDCEventsReapplier(
+		shard.GetMetricsClient(),
+		logger,
+	)
 
 	// Only start the replicator processor if valid publisher is passed in
 	if publisher != nil {
 		historyEngImpl.replicatorProcessor = newReplicatorQueueProcessor(
 			shard,
-			historyEngImpl.historyCache,
-			publisher, executionManager,
-			historyV2Manager,
+			historyCache,
+			publisher,
+			shard.GetExecutionManager(),
+			shard.GetHistoryManager(),
 			logger,
 		)
 		historyEngImpl.replicator = newHistoryReplicator(
@@ -243,16 +256,16 @@ func NewEngineWithShardContext(
 			historyEngImpl,
 			historyCache,
 			shard.GetDomainCache(),
-			historyV2Manager,
+			shard.GetHistoryManager(),
 			logger,
 		)
-		historyEngImpl.nDCReplicator = newNDCHistoryReplicator(
+		historyEngImpl.nDCHistoryReplicator = newNDCHistoryReplicator(
 			shard,
 			historyCache,
 			historyEngImpl.eventsReapplier,
 			logger,
 		)
-		historyEngImpl.nDCactivityReplicator = newNDCActivityReplicator(
+		historyEngImpl.nDCActivityReplicator = newNDCActivityReplicator(
 			shard,
 			historyCache,
 			logger,
@@ -274,12 +287,16 @@ func NewEngineWithShardContext(
 
 	var replicationTaskProcessors []*ReplicationTaskProcessor
 	for _, replicationTaskFetcher := range replicationTaskFetchers.GetFetchers() {
-		replicationTaskProcessor := NewReplicationTaskProcessor(shard, historyEngImpl, domainReplicator, shard.GetMetricsClient(), replicationTaskFetcher)
-		replicationTaskProcessors = append(replicationTaskProcessors, replicationTaskProcessor)
+		replicationTaskProcessors = append(replicationTaskProcessors, NewReplicationTaskProcessor(
+			shard,
+			historyEngImpl,
+			domainReplicator,
+			shard.GetMetricsClient(),
+			replicationTaskFetcher,
+		))
 	}
 	historyEngImpl.replicationTaskProcessors = replicationTaskProcessors
 
-	shard.SetEngine(historyEngImpl)
 	return historyEngImpl
 }
 
@@ -499,7 +516,7 @@ func (e *historyEngineImpl) StartWorkflowExecution(
 		WorkflowId: common.StringPtr(workflowID),
 		RunId:      common.StringPtr(uuid.New()),
 	}
-	clusterMetadata := e.shard.GetService().GetClusterMetadata()
+	clusterMetadata := e.shard.GetClusterMetadata()
 	msBuilder, err := e.createMutableState(clusterMetadata, domainEntry, execution.GetRunId())
 	if err != nil {
 		return nil, err
@@ -1743,7 +1760,7 @@ func (e *historyEngineImpl) SignalWithStartWorkflowExecution(
 		RunId:      common.StringPtr(uuid.New()),
 	}
 
-	clusterMetadata := e.shard.GetService().GetClusterMetadata()
+	clusterMetadata := e.shard.GetClusterMetadata()
 	msBuilder, err := e.createMutableState(clusterMetadata, domainEntry, execution.GetRunId())
 	if err != nil {
 		return nil, err
@@ -1987,7 +2004,7 @@ func (e *historyEngineImpl) ReplicateEventsV2(
 	replicateRequest *h.ReplicateEventsV2Request,
 ) error {
 
-	return e.nDCReplicator.ApplyEvents(ctx, replicateRequest)
+	return e.nDCHistoryReplicator.ApplyEvents(ctx, replicateRequest)
 }
 
 func (e *historyEngineImpl) SyncShardStatus(
@@ -2013,7 +2030,7 @@ func (e *historyEngineImpl) SyncActivity(
 	request *h.SyncActivityRequest,
 ) (retError error) {
 
-	return e.nDCactivityReplicator.SyncActivity(ctx, request)
+	return e.nDCActivityReplicator.SyncActivity(ctx, request)
 }
 
 func (e *historyEngineImpl) ResetWorkflowExecution(

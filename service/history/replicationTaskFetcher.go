@@ -27,12 +27,11 @@ import (
 
 	"github.com/uber/cadence/.gen/go/cadence/workflowserviceclient"
 	r "github.com/uber/cadence/.gen/go/replicator"
-	"github.com/uber/cadence/client"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/backoff"
-	"github.com/uber/cadence/common/cluster"
 	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/log/tag"
+	"github.com/uber/cadence/common/service"
 	"github.com/uber/cadence/common/service/config"
 )
 
@@ -63,11 +62,12 @@ type (
 
 // NewReplicationTaskFetchers creates an instance of ReplicationTaskFetchers with given configs.
 func NewReplicationTaskFetchers(
-	logger log.Logger,
-	consumerConfig *config.ReplicationConsumerConfig,
-	clusterMetadata cluster.Metadata,
-	clientBean client.Bean,
+	serviceBase service.Service,
 ) *ReplicationTaskFetchers {
+
+	logger := serviceBase.GetLogger()
+	clusterMetadata := serviceBase.GetClusterMetadata()
+	consumerConfig := clusterMetadata.GetReplicationConsumerConfig()
 
 	var fetchers []*ReplicationTaskFetcher
 	if consumerConfig.Type == config.ReplicationConsumerTypeRPC {
@@ -78,7 +78,7 @@ func NewReplicationTaskFetchers(
 			}
 
 			if clusterName != clusterMetadata.GetCurrentClusterName() {
-				remoteFrontendClient := clientBean.GetRemoteFrontendClient(clusterName)
+				remoteFrontendClient := serviceBase.GetRemoteFrontendClient(clusterName)
 				fetcher := newReplicationTaskFetcher(logger, clusterName, fetcherConfig, remoteFrontendClient)
 				fetchers = append(fetchers, fetcher)
 			}

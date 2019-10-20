@@ -81,35 +81,35 @@ func newTimerQueueProcessor(
 	logger log.Logger,
 ) timerQueueProcessor {
 
-	currentClusterName := shard.GetService().GetClusterMetadata().GetCurrentClusterName()
+	currentClusterName := shard.GetClusterMetadata().GetCurrentClusterName()
 	logger = logger.WithTags(tag.ComponentTimerQueue)
 	taskAllocator := newTaskAllocator(shard)
 
 	standbyTimerProcessors := make(map[string]*timerQueueStandbyProcessorImpl)
-	for clusterName, info := range shard.GetService().GetClusterMetadata().GetAllClusterInfo() {
+	for clusterName, info := range shard.GetClusterMetadata().GetAllClusterInfo() {
 		if !info.Enabled {
 			continue
 		}
 
-		if clusterName != shard.GetService().GetClusterMetadata().GetCurrentClusterName() {
+		if clusterName != shard.GetClusterMetadata().GetCurrentClusterName() {
 			historyRereplicator := xdc.NewHistoryRereplicator(
 				currentClusterName,
 				shard.GetDomainCache(),
-				shard.GetService().GetClientBean().GetRemoteAdminClient(clusterName),
+				shard.GetRemoteAdminClient(clusterName),
 				func(ctx context.Context, request *h.ReplicateRawEventsRequest) error {
 					return historyService.ReplicateRawEvents(ctx, request)
 				},
-				shard.GetService().GetPayloadSerializer(),
+				shard.GetPayloadSerializer(),
 				historyRereplicationTimeout,
 				logger,
 			)
 			nDCHistoryResender := xdc.NewNDCHistoryResender(
 				shard.GetDomainCache(),
-				shard.GetService().GetClientBean().GetRemoteAdminClient(clusterName),
+				shard.GetRemoteAdminClient(clusterName),
 				func(ctx context.Context, request *h.ReplicateEventsV2Request) error {
 					return historyService.ReplicateEventsV2(ctx, request)
 				},
-				shard.GetService().GetPayloadSerializer(),
+				shard.GetPayloadSerializer(),
 				logger,
 			)
 			standbyTimerProcessors[clusterName] = newTimerQueueStandbyProcessor(
@@ -125,7 +125,7 @@ func newTimerQueueProcessor(
 	}
 
 	return &timerQueueProcessorImpl{
-		isGlobalDomainEnabled:  shard.GetService().GetClusterMetadata().IsGlobalDomainEnabled(),
+		isGlobalDomainEnabled:  shard.GetClusterMetadata().IsGlobalDomainEnabled(),
 		currentClusterName:     currentClusterName,
 		shard:                  shard,
 		taskAllocator:          taskAllocator,
@@ -194,7 +194,7 @@ func (t *timerQueueProcessorImpl) FailoverDomain(
 
 	minLevel := t.shard.GetTimerClusterAckLevel(t.currentClusterName)
 	standbyClusterName := t.currentClusterName
-	for clusterName, info := range t.shard.GetService().GetClusterMetadata().GetAllClusterInfo() {
+	for clusterName, info := range t.shard.GetClusterMetadata().GetAllClusterInfo() {
 		if !info.Enabled {
 			continue
 		}

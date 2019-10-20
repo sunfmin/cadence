@@ -51,7 +51,7 @@ type (
 // newTaskAllocator create a new task allocator
 func newTaskAllocator(shard ShardContext) taskAllocator {
 	return &taskAllocatorImpl{
-		currentClusterName: shard.GetService().GetClusterMetadata().GetCurrentClusterName(),
+		currentClusterName: shard.GetClusterMetadata().GetCurrentClusterName(),
 		shard:              shard,
 		domainCache:        shard.GetDomainCache(),
 		logger:             shard.GetLogger(),

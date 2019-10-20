@@ -57,7 +57,7 @@ type (
 		frontendHandler    workflowserviceserver.Interface
 		clientBeanProvider clientBeanProvider
 
-		startFn func() error
+		startFn func()
 		stopFn  func()
 	}
 )
@@ -82,7 +82,7 @@ func NewDCRedirectionHandler(wfHandler *WorkflowHandler, policy config.DCRedirec
 		service:            wfHandler.Service,
 		frontendHandler:    wfHandler,
 		clientBeanProvider: func() client.Bean { return wfHandler.Service.GetClientBean() },
-		startFn:            func() error { return wfHandler.Start() },
+		startFn:            func() { wfHandler.Start() },
 		stopFn:             func() { wfHandler.Stop() },
 	}
 }
@@ -94,8 +94,8 @@ func (handler *DCRedirectionHandlerImpl) RegisterHandler() {
 }
 
 // Start starts the handler
-func (handler *DCRedirectionHandlerImpl) Start() error {
-	return handler.startFn()
+func (handler *DCRedirectionHandlerImpl) Start() {
+	handler.startFn()
 }
 
 // Stop stops the handler

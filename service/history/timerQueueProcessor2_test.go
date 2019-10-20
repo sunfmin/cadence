@@ -165,7 +165,7 @@ func (s *timerQueueProcessor2Suite) SetupTest() {
 	s.mockShardManager.On("UpdateShard", mock.Anything).Return(nil).Maybe()
 
 	h := &historyEngineImpl{
-		currentClusterName:   s.mockShard.GetService().GetClusterMetadata().GetCurrentClusterName(),
+		currentClusterName:   s.mockShard.GetClusterMetadata().GetCurrentClusterName(),
 		shard:                s.mockShard,
 		clusterMetadata:      s.mockClusterMetadata,
 		historyV2Mgr:         s.mockHistoryV2Mgr,

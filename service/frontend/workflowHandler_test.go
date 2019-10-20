@@ -104,7 +104,6 @@ func (s *workflowHandlerSuite) SetupTest() {
 	s.logger = loggerimpl.NewNopLogger()
 	s.controller = gomock.NewController(s.T())
 	s.mockClusterMetadata = &mocks.ClusterMetadata{}
-	s.mockProducer = &mocks.KafkaProducer{}
 	s.mockMetricClient = metrics.NewClient(tally.NoopScope, metrics.Frontend)
 	s.mockMessagingClient = mocks.NewMockMessagingClient(s.mockProducer, nil)
 	s.mockMetadataMgr = &mocks.MetadataManager{}
@@ -144,8 +143,12 @@ func (s *workflowHandlerSuite) getWorkflowHandler(config *Config) *WorkflowHandl
 		s.mockService.GetMetricsClient(),
 		s.mockService.GetLogger(),
 	)
-	return NewWorkflowHandler(s.mockService, config, s.mockMetadataMgr,
-		s.mockHistoryV2Mgr, s.mockVisibilityMgr, s.mockProducer, nil, domainCache)
+	handler := NewWorkflowHandler(s.mockService, config, nil)
+	handler.metadataMgr = s.mockMetadataMgr
+	handler.historyV2Mgr = s.mockHistoryV2Mgr
+	handler.visibilityMgr = s.mockVisibilityMgr
+	handler.domainCache = domainCache
+	return handler
 }
 
 func (s *workflowHandlerSuite) getWorkflowHandlerHelper() *WorkflowHandler {
@@ -491,8 +494,13 @@ func (s *workflowHandlerSuite) TestStartWorkflowExecution_Failed_InvalidTaskStar
 
 func (s *workflowHandlerSuite) getWorkflowHandlerWithParams(mService cs.Service, config *Config,
 	mMetadataManager persistence.MetadataManager, mockDomainCache *cache.DomainCacheMock) *WorkflowHandler {
-	return NewWorkflowHandler(mService, config, mMetadataManager, s.mockHistoryV2Mgr,
-		s.mockVisibilityMgr, s.mockProducer, nil, mockDomainCache)
+
+	handler := NewWorkflowHandler(mService, config, nil)
+	handler.metadataMgr = mMetadataManager
+	handler.historyV2Mgr = s.mockHistoryV2Mgr
+	handler.visibilityMgr = s.mockVisibilityMgr
+	handler.domainCache = mockDomainCache
+	return handler
 }
 
 func (s *workflowHandlerSuite) TestRegisterDomain_Failure_InvalidArchivalURI() {

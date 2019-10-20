@@ -69,6 +69,8 @@ var _ workflowserviceserver.Interface = (*WorkflowHandler)(nil)
 type (
 	// WorkflowHandler - Thrift handler interface for workflow service
 	WorkflowHandler struct {
+		service.Service
+
 		domainCache               cache.DomainCache
 		metadataMgr               persistence.MetadataManager
 		historyV2Mgr              persistence.HistoryManager
@@ -86,7 +88,6 @@ type (
 		visibilityQueryValidator  *validator.VisibilityQueryValidator
 		searchAttributesValidator *validator.SearchAttributesValidator
 		domainReplicationQueue    persistence.DomainReplicationQueue
-		service.Service
 	}
 
 	getHistoryContinuationToken struct {
@@ -148,24 +149,19 @@ var (
 
 // NewWorkflowHandler creates a thrift handler for the cadence service
 func NewWorkflowHandler(
-	sVice service.Service,
+	serviceBase service.Service,
 	config *Config,
-	metadataMgr persistence.MetadataManager,
-	historyV2Mgr persistence.HistoryManager,
-	visibilityMgr persistence.VisibilityManager,
 	replicationMessageSink messaging.Producer,
-	domainReplicationQueue persistence.DomainReplicationQueue,
-	domainCache cache.DomainCache,
 ) *WorkflowHandler {
 	handler := &WorkflowHandler{
-		Service:         sVice,
+		Service:         serviceBase,
 		config:          config,
-		metadataMgr:     metadataMgr,
-		historyV2Mgr:    historyV2Mgr,
-		visibilityMgr:   visibilityMgr,
+		metadataMgr:     serviceBase.GetMetadataManager(),
+		historyV2Mgr:    serviceBase.GetHistoryManager(),
+		visibilityMgr:   serviceBase.GetVisibilityManager(),
 		tokenSerializer: common.NewJSONTaskTokenSerializer(),
-		metricsClient:   sVice.GetMetricsClient(),
-		domainCache:     domainCache,
+		metricsClient:   serviceBase.GetMetricsClient(),
+		domainCache:     serviceBase.GetDomainCache(),
 		rateLimiter: quotas.NewMultiStageRateLimiter(
 			func() float64 {
 				return float64(config.RPS())
@@ -178,22 +174,22 @@ func NewWorkflowHandler(
 		domainHandler: domain.NewHandler(
 			config.MinRetentionDays(),
 			config.MaxBadBinaries,
-			sVice.GetLogger(),
-			metadataMgr,
-			sVice.GetClusterMetadata(),
-			domain.NewDomainReplicator(replicationMessageSink, sVice.GetLogger()),
-			sVice.GetArchivalMetadata(),
-			sVice.GetArchiverProvider(),
+			serviceBase.GetLogger(),
+			serviceBase.GetMetadataManager(),
+			serviceBase.GetClusterMetadata(),
+			domain.NewDomainReplicator(replicationMessageSink, serviceBase.GetLogger()),
+			serviceBase.GetArchivalMetadata(),
+			serviceBase.GetArchiverProvider(),
 		),
 		visibilityQueryValidator: validator.NewQueryValidator(config.ValidSearchAttributes),
 		searchAttributesValidator: validator.NewSearchAttributesValidator(
-			sVice.GetLogger(),
+			serviceBase.GetLogger(),
 			config.ValidSearchAttributes,
 			config.SearchAttributesNumberOfKeysLimit,
 			config.SearchAttributesSizeOfValueLimit,
 			config.SearchAttributesTotalSizeLimit,
 		),
-		domainReplicationQueue: domainReplicationQueue,
+		domainReplicationQueue: serviceBase.GetDomainReplicationQueue(),
 	}
 	// prevent us from trying to serve requests before handler's Start() is complete
 	handler.startWG.Add(1)
@@ -208,28 +204,15 @@ func (wh *WorkflowHandler) RegisterHandler() {
 }
 
 // Start starts the handler
-func (wh *WorkflowHandler) Start() error {
-	wh.domainCache.Start()
-
-	wh.history = wh.GetClientBean().GetHistoryClient()
-	matchingRawClient, err := wh.GetClientBean().GetMatchingClient(wh.domainCache.GetDomainName)
-	if err != nil {
-		return err
-	}
-	wh.matchingRawClient = matchingRawClient
-	wh.matching = matching.NewRetryableClient(wh.matchingRawClient, common.CreateMatchingServiceRetryPolicy(),
-		common.IsWhitelistServiceTransientError)
+func (wh *WorkflowHandler) Start() {
+	wh.history = wh.GetHistoryClient()
+	wh.matchingRawClient = wh.GetMatchingRawClient()
+	wh.matching = wh.GetMatchingClient()
 	wh.startWG.Done()
-	return nil
 }
 
 // Stop stops the handler
 func (wh *WorkflowHandler) Stop() {
-	wh.domainReplicationQueue.Close()
-	wh.domainCache.Stop()
-	wh.metadataMgr.Close()
-	wh.visibilityMgr.Close()
-	wh.Service.Stop()
 }
 
 // Health is for health check

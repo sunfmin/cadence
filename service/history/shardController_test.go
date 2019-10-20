@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/uber-go/tally"
 	"github.com/uber/cadence/client"
+	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/cache"
 	"github.com/uber/cadence/common/cluster"
 	"github.com/uber/cadence/common/log"
@@ -113,6 +115,8 @@ func (s *shardControllerSuite) TearDownTest() {
 }
 
 func (s *shardControllerSuite) TestAcquireShardSuccess() {
+	atomic.StoreInt32(&s.shardController.status, common.DaemonStatusStarted)
+
 	numShards := 10
 	s.config.NumberOfShards = numShards
 
@@ -194,6 +198,8 @@ func (s *shardControllerSuite) TestAcquireShardSuccess() {
 }
 
 func (s *shardControllerSuite) TestAcquireShardLookupFailure() {
+	atomic.StoreInt32(&s.shardController.status, common.DaemonStatusStarted)
+
 	numShards := 2
 	s.config.NumberOfShards = numShards
 	for shardID := 0; shardID < numShards; shardID++ {
@@ -208,6 +214,8 @@ func (s *shardControllerSuite) TestAcquireShardLookupFailure() {
 }
 
 func (s *shardControllerSuite) TestAcquireShardRenewSuccess() {
+	atomic.StoreInt32(&s.shardController.status, common.DaemonStatusStarted)
+
 	numShards := 2
 	s.config.NumberOfShards = numShards
 
@@ -284,6 +292,8 @@ func (s *shardControllerSuite) TestAcquireShardRenewSuccess() {
 }
 
 func (s *shardControllerSuite) TestAcquireShardRenewLookupFailed() {
+	atomic.StoreInt32(&s.shardController.status, common.DaemonStatusStarted)
+
 	numShards := 2
 	s.config.NumberOfShards = numShards
 
@@ -574,8 +584,12 @@ func (s *shardControllerSuite) TestShardControllerClosed() {
 	workerWG.Wait()
 }
 
-func (s *shardControllerSuite) setupMocksForAcquireShard(shardID int, mockEngine *MockEngine, currentRangeID,
-	newRangeID int64) {
+func (s *shardControllerSuite) setupMocksForAcquireShard(
+	shardID int,
+	mockEngine *MockEngine,
+	currentRangeID int64,
+	newRangeID int64,
+) {
 
 	replicationAck := int64(201)
 	currentClusterTransferAck := int64(210)

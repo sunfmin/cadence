@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/uber-go/tally"
+
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/client"
 	"github.com/uber/cadence/common"
@@ -64,20 +65,24 @@ type (
 	// TestShardContext shard context for testing.
 	TestShardContext struct {
 		shardID int
-		sync.RWMutex
-		service                service.Service
-		shardInfo              *persistence.ShardInfo
-		transferSequenceNumber int64
-		historyV2Mgr           persistence.HistoryManager
-		executionMgr           persistence.ExecutionManager
-		domainCache            cache.DomainCache
-		clusterMetadata        cluster.Metadata
-		eventsCache            eventsCache
-		engine                 Engine
+		service.Service
+		config *Config
 
-		config                    *Config
-		logger                    log.Logger
-		metricsClient             metrics.Client
+		historyV2Mgr    persistence.HistoryManager
+		executionMgr    persistence.ExecutionManager
+		visibilityMgr   persistence.VisibilityManager
+		domainCache     cache.DomainCache
+		clusterMetadata cluster.Metadata
+		eventsCache     eventsCache
+		metricsClient   metrics.Client
+
+		logger log.Logger
+
+		engine Engine
+
+		sync.RWMutex
+		shardInfo                 *persistence.ShardInfo
+		transferSequenceNumber    int64
 		standbyClusterCurrentTime map[string]time.Time
 		timerMaxReadLevelMap      map[string]time.Time
 	}
@@ -91,10 +96,19 @@ type (
 
 var _ ShardContext = (*TestShardContext)(nil)
 
-func newTestShardContext(shardInfo *persistence.ShardInfo, transferSequenceNumber int64,
-	historyV2Mgr persistence.HistoryManager, executionMgr persistence.ExecutionManager,
-	metadataMgr persistence.MetadataManager, clusterMetadata cluster.Metadata,
-	clientBean client.Bean, config *Config, logger log.Logger) *TestShardContext {
+func newTestShardContext(
+	shardInfo *persistence.ShardInfo,
+	transferSequenceNumber int64,
+	historyV2Mgr persistence.HistoryManager,
+	executionMgr persistence.ExecutionManager,
+	visibilityMgr persistence.VisibilityManager,
+	metadataMgr persistence.MetadataManager,
+	clusterMetadata cluster.Metadata,
+	clientBean client.Bean,
+	config *Config,
+	logger log.Logger,
+) *TestShardContext {
+
 	metricsClient := metrics.NewClient(tally.NoopScope, metrics.History)
 	domainCache := cache.NewDomainCache(metadataMgr, clusterMetadata, metricsClient, logger)
 	serializer := persistence.NewPayloadSerializer()
@@ -121,7 +135,7 @@ func newTestShardContext(shardInfo *persistence.ShardInfo, transferSequenceNumbe
 
 	shardCtx := &TestShardContext{
 		shardID: 0,
-		service: service.NewTestService(
+		Service: service.NewTestService(
 			clusterMetadata,
 			nil,
 			metricsClient,
@@ -151,19 +165,19 @@ func (s *TestShardContext) GetShardID() int {
 	return s.shardID
 }
 
-// GetService test implementation
-func (s *TestShardContext) GetService() service.Service {
-	return s.service
-}
-
 // GetExecutionManager test implementation
 func (s *TestShardContext) GetExecutionManager() persistence.ExecutionManager {
 	return s.executionMgr
 }
 
-// GetHistoryManager return historyV2
+// GetHistoryManager test implementation
 func (s *TestShardContext) GetHistoryManager() persistence.HistoryManager {
 	return s.historyV2Mgr
+}
+
+// GetVisibilityManager test implementation
+func (s *TestShardContext) GetVisibilityManager() persistence.VisibilityManager {
+	return s.visibilityMgr
 }
 
 // GetDomainCache test implementation
@@ -412,7 +426,7 @@ func (s *TestShardContext) CreateWorkflowExecution(request *persistence.CreateWo
 // UpdateWorkflowExecution test implementation
 func (s *TestShardContext) UpdateWorkflowExecution(request *persistence.UpdateWorkflowExecutionRequest) (*persistence.UpdateWorkflowExecutionResponse, error) {
 	// assign IDs for the timer tasks. They need to be assigned under shard lock.
-	clusterMetadata := s.GetService().GetClusterMetadata()
+	clusterMetadata := s.GetClusterMetadata()
 	clusterName := clusterMetadata.GetCurrentClusterName()
 	for _, task := range request.UpdateWorkflowMutation.TimerTasks {
 		ts := task.GetVisibilityTimestamp()
@@ -445,7 +459,7 @@ func (s *TestShardContext) UpdateTimerMaxReadLevel(cluster string) time.Time {
 	defer s.Unlock()
 
 	currentTime := time.Now()
-	if cluster != "" && cluster != s.GetService().GetClusterMetadata().GetCurrentClusterName() {
+	if cluster != "" && cluster != s.GetClusterMetadata().GetCurrentClusterName() {
 		currentTime = s.standbyClusterCurrentTime[cluster]
 	}
 
@@ -520,7 +534,7 @@ func (s *TestShardContext) GetTimeSource() clock.TimeSource {
 func (s *TestShardContext) SetCurrentTime(cluster string, currentTime time.Time) {
 	s.Lock()
 	defer s.Unlock()
-	if cluster != s.GetService().GetClusterMetadata().GetCurrentClusterName() {
+	if cluster != s.GetClusterMetadata().GetCurrentClusterName() {
 		prevTime := s.standbyClusterCurrentTime[cluster]
 		if prevTime.Before(currentTime) {
 			s.standbyClusterCurrentTime[cluster] = currentTime
@@ -534,7 +548,7 @@ func (s *TestShardContext) SetCurrentTime(cluster string, currentTime time.Time)
 func (s *TestShardContext) GetCurrentTime(cluster string) time.Time {
 	s.RLock()
 	defer s.RUnlock()
-	if cluster != s.GetService().GetClusterMetadata().GetCurrentClusterName() {
+	if cluster != s.GetClusterMetadata().GetCurrentClusterName() {
 		return s.standbyClusterCurrentTime[cluster]
 	}
 	return time.Now()
@@ -545,7 +559,9 @@ func NewDynamicConfigForTest() *Config {
 	dc := dynamicconfig.NewNopCollection()
 	config := NewConfig(dc, 1, cconfig.StoreTypeCassandra, false)
 	// reduce the duration of long poll to increase test speed
-	config.LongPollExpirationInterval = dc.GetDurationPropertyFilteredByDomain(dynamicconfig.HistoryLongPollExpirationInterval, 10*time.Second)
+	config.LongPollExpirationInterval = dc.GetDurationPropertyFilteredByDomain(
+		dynamicconfig.HistoryLongPollExpirationInterval, 10*time.Second,
+	)
 	return config
 }
 
@@ -556,8 +572,18 @@ func (s *TestBase) SetupWorkflowStore() {
 	log := loggerimpl.NewDevelopmentForTest(s.Suite)
 	config := NewDynamicConfigForTest()
 	clusterMetadata := cluster.GetTestClusterMetadata(false, false)
-	s.ShardContext = newTestShardContext(s.ShardInfo, 0,
-		s.HistoryV2Mgr, s.ExecutionManager, s.MetadataManager, clusterMetadata, nil, config, log)
+	s.ShardContext = newTestShardContext(
+		s.ShardInfo,
+		0,
+		s.HistoryV2Mgr,
+		s.ExecutionManager,
+		s.VisibilityMgr,
+		s.MetadataManager,
+		clusterMetadata,
+		nil,
+		config,
+		log,
+	)
 	s.TestBase.TaskIDGenerator = s.ShardContext
 }
 

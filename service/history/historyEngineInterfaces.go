@@ -31,11 +31,6 @@ import (
 )
 
 type (
-	// EngineFactory is used to create an instance of sharded history engine
-	EngineFactory interface {
-		CreateEngine(context ShardContext) Engine
-	}
-
 	queueProcessor interface {
 		common.Daemon
 		notifyNewTask()

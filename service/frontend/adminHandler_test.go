@@ -23,6 +23,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -74,6 +75,14 @@ func TestAdminHandlerSuite(t *testing.T) {
 }
 
 func (s *adminHandlerSuite) SetupTest() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("########")
+			fmt.Println(string(debug.Stack()))
+			fmt.Println("########")
+		}
+	}()
+
 	var err error
 	s.logger, err = loggerimpl.NewDevelopment()
 	s.Require().NoError(err)
@@ -95,7 +104,9 @@ func (s *adminHandlerSuite) SetupTest() {
 	s.domainCache.On("Start").Return()
 	s.domainCache.On("Stop").Return()
 	s.mockHistoryV2Mgr = &mocks.HistoryV2Manager{}
-	s.handler = NewAdminHandler(s.service, 1, s.domainCache, s.mockHistoryV2Mgr, nil)
+	s.handler = NewAdminHandler(s.service, 1, nil)
+	s.handler.domainCache = s.domainCache
+	s.handler.historyV2Mgr = s.mockHistoryV2Mgr
 	s.handler.Start()
 }
 

@@ -24,14 +24,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/olivere/elastic"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"github.com/olivere/elastic"
 
 	"github.com/pborman/uuid"
 	"github.com/uber-go/tally"
+
 	"github.com/uber/cadence/.gen/go/admin"
 	"github.com/uber/cadence/.gen/go/admin/adminserviceserver"
 	h "github.com/uber/cadence/.gen/go/history"
@@ -55,15 +56,15 @@ var _ adminserviceserver.Interface = (*AdminHandler)(nil)
 type (
 	// AdminHandler - Thrift handler interface for admin service
 	AdminHandler struct {
-		status                int32
-		numberOfHistoryShards int
 		service.Service
-		history       history.Client
-		domainCache   cache.DomainCache
-		metricsClient metrics.Client
-		historyV2Mgr  persistence.HistoryManager
-		startWG       sync.WaitGroup
-		params        *service.BootstrapParams
+
+		numberOfHistoryShards int
+		historyClient         history.Client
+		domainCache           cache.DomainCache
+		metricsClient         metrics.Client
+		historyV2Mgr          persistence.HistoryManager
+		startWG               sync.WaitGroup
+		params                *service.BootstrapParams
 	}
 
 	getWorkflowRawHistoryV2Token struct {
@@ -81,18 +82,17 @@ type (
 
 // NewAdminHandler creates a thrift handler for the cadence admin service
 func NewAdminHandler(
-	sVice service.Service,
+	serviceBase service.Service,
 	numberOfHistoryShards int,
-	domainCache cache.DomainCache,
-	historyV2Mgr persistence.HistoryManager,
 	params *service.BootstrapParams,
 ) *AdminHandler {
 	handler := &AdminHandler{
-		status:                common.DaemonStatusInitialized,
 		numberOfHistoryShards: numberOfHistoryShards,
-		Service:               sVice,
-		domainCache:           domainCache,
-		historyV2Mgr:          historyV2Mgr,
+		Service:               serviceBase,
+		domainCache:           serviceBase.GetDomainCache(),
+		historyV2Mgr:          serviceBase.GetHistoryManager(),
+		historyClient:         serviceBase.GetHistoryClient(),
+		metricsClient:         serviceBase.GetMetricsClient(),
 		params:                params,
 	}
 	// prevent us from trying to serve requests before handler's Start() is complete
@@ -106,26 +106,13 @@ func (adh *AdminHandler) RegisterHandler() {
 }
 
 // Start starts the handler
-func (adh *AdminHandler) Start() error {
-	if !atomic.CompareAndSwapInt32(&adh.status, common.DaemonStatusInitialized, common.DaemonStatusStarted) {
-		return nil
-	}
-
-	adh.domainCache.Start()
-
-	adh.history = adh.GetClientBean().GetHistoryClient()
-	adh.metricsClient = adh.Service.GetMetricsClient()
+func (adh *AdminHandler) Start() {
 	adh.startWG.Done()
-	return nil
 }
 
 // Stop stops the handler
 func (adh *AdminHandler) Stop() {
-	if !atomic.CompareAndSwapInt32(&adh.status, common.DaemonStatusStarted, common.DaemonStatusStopped) {
-		return
-	}
-	adh.Service.Stop()
-	adh.domainCache.Stop()
+
 }
 
 // AddSearchAttribute add search attribute to whitelist
@@ -205,7 +192,7 @@ func (adh *AdminHandler) DescribeWorkflowExecution(ctx context.Context, request 
 	domainID, err := adh.domainCache.GetDomainID(request.GetDomain())
 
 	historyAddr := historyHost.GetAddress()
-	resp2, err := adh.history.DescribeMutableState(ctx, &hist.DescribeMutableStateRequest{
+	resp2, err := adh.historyClient.DescribeMutableState(ctx, &hist.DescribeMutableStateRequest{
 		DomainUUID: &domainID,
 		Execution:  request.Execution,
 	})
@@ -227,7 +214,7 @@ func (adh *AdminHandler) RemoveTask(ctx context.Context, request *gen.RemoveTask
 	if request == nil || request.ShardID == nil || request.Type == nil || request.TaskID == nil {
 		return adh.error(errRequestNotSet, scope)
 	}
-	err := adh.history.RemoveTask(ctx, request)
+	err := adh.historyClient.RemoveTask(ctx, request)
 	return err
 }
 
@@ -238,7 +225,7 @@ func (adh *AdminHandler) CloseShard(ctx context.Context, request *gen.CloseShard
 	if request == nil || request.ShardID == nil {
 		return adh.error(errRequestNotSet, scope)
 	}
-	err := adh.history.CloseShard(ctx, request)
+	err := adh.historyClient.CloseShard(ctx, request)
 	return err
 }
 
@@ -256,7 +243,7 @@ func (adh *AdminHandler) DescribeHistoryHost(ctx context.Context, request *gen.D
 		}
 	}
 
-	resp, err := adh.history.DescribeHistoryHost(ctx, request)
+	resp, err := adh.historyClient.DescribeHistoryHost(ctx, request)
 	return resp, err
 }
 
@@ -329,7 +316,7 @@ func (adh *AdminHandler) GetWorkflowExecutionRawHistory(
 			return nil, &gen.BadRequestError{Message: "Invalid FirstEventID && NextEventID combination."}
 		}
 
-		response, err := adh.history.GetMutableState(ctx, &h.GetMutableStateRequest{
+		response, err := adh.historyClient.GetMutableState(ctx, &h.GetMutableStateRequest{
 			DomainUUID: common.StringPtr(domainID),
 			Execution:  execution,
 		})
@@ -444,7 +431,7 @@ func (adh *AdminHandler) GetWorkflowExecutionRawHistoryV2(
 	var pageToken *getWorkflowRawHistoryV2Token
 	var targetVersionHistory *persistence.VersionHistory
 	if request.NextPageToken == nil {
-		response, err := adh.history.GetMutableState(ctx, &h.GetMutableStateRequest{
+		response, err := adh.historyClient.GetMutableState(ctx, &h.GetMutableStateRequest{
 			DomainUUID: common.StringPtr(domainID),
 			Execution:  execution,
 		})

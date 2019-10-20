@@ -102,7 +102,7 @@ func (s *timerQueueProcessorSuite) SetupTest() {
 	err := s.ShardContext.UpdateTimerClusterAckLevel(cluster.TestAlternativeClusterName, maximumTime)
 	s.Nil(err)
 	s.engineImpl = &historyEngineImpl{
-		currentClusterName:   s.ShardContext.GetService().GetClusterMetadata().GetCurrentClusterName(),
+		currentClusterName:   s.ShardContext.GetClusterMetadata().GetCurrentClusterName(),
 		shard:                s.ShardContext,
 		clusterMetadata:      s.ShardContext.GetClusterMetadata(),
 		historyCache:         historyCache,

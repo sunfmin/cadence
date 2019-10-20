@@ -159,7 +159,7 @@ func (s *resetorSuite) SetupTest() {
 
 	historyCache := newHistoryCache(mockShard)
 	h := &historyEngineImpl{
-		currentClusterName:   mockShard.GetService().GetClusterMetadata().GetCurrentClusterName(),
+		currentClusterName:   mockShard.GetClusterMetadata().GetCurrentClusterName(),
 		shard:                mockShard,
 		clusterMetadata:      s.mockClusterMetadata,
 		executionManager:     s.mockExecutionMgr,
