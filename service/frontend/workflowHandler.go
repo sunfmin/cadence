@@ -2950,6 +2950,10 @@ func (wh *WorkflowHandler) QueryWorkflow(
 		return nil, wh.error(err, scope)
 	}
 
+	if (domainID == "0583739e-44fb-4f17-8fd2-683081342718" || domainID == "271da993-172e-4399-b6d9-d74ce3fc185c") && !response.GetIsWorkflowRunning() {
+		return nil, &gen.BadRequestError{Message: "this domain cannot query on closed workflow."}
+	}
+
 	// if workflow is closed and a rejection condition is given then check if query should be rejected before proceeding
 	workflowCloseStatus := response.GetWorkflowCloseState()
 	if workflowCloseStatus != persistence.WorkflowCloseStatusNone && queryRequest.QueryRejectCondition != nil {
