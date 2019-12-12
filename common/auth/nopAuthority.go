@@ -18,16 +18,20 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-package main
+package auth
 
-import (
-	"os"
+import "context"
 
-	_ "github.com/uber/cadence/common/persistence/sql/sqlplugin/mysql"    // needed to load mysql plugin
-	_ "github.com/uber/cadence/common/persistence/sql/sqlplugin/postgres" // needed to load postgres plugin
-	"github.com/uber/cadence/tools/sql"
-)
+type nopAuthority struct{}
 
-func main() {
-	sql.RunTool(os.Args)
+// NewNopAuthority creates a noop authority
+func NewNopAuthority() Authority {
+	return &nopAuthority{}
+}
+
+func (a *nopAuthority) IsAuthorized(
+	ctx context.Context,
+	params *AuthorizationParams,
+) (AuthorizationResult, error) {
+	return AuthorizationResult{AuthorizationDecision: DecisionAllow}, nil
 }

@@ -23,7 +23,6 @@ package history
 import (
 	"errors"
 	"fmt"
-	"github.com/uber/cadence/common/service/dynamicconfig"
 	"sync"
 	"testing"
 	"time"
@@ -41,6 +40,7 @@ import (
 	mmocks "github.com/uber/cadence/common/mocks"
 	"github.com/uber/cadence/common/persistence"
 	"github.com/uber/cadence/common/resource"
+	"github.com/uber/cadence/common/service/dynamicconfig"
 )
 
 type (

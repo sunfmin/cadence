@@ -18,16 +18,40 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-package main
+//go:generate mockgen -copyright_file ../../LICENSE -package $GOPACKAGE -source $GOFILE -destination authority_mock.go
 
-import (
-	"os"
+package auth
 
-	_ "github.com/uber/cadence/common/persistence/sql/sqlplugin/mysql"    // needed to load mysql plugin
-	_ "github.com/uber/cadence/common/persistence/sql/sqlplugin/postgres" // needed to load postgres plugin
-	"github.com/uber/cadence/tools/sql"
+import "context"
+
+const (
+	// DecisionDeny means auth decision is deny
+	DecisionDeny AuthorizationDecision = iota
+	// DecisionAllow means auth decision is allow
+	DecisionAllow
+	//DecisionNoOpinion means auth decision is unknown
+	DecisionNoOpinion
 )
 
-func main() {
-	sql.RunTool(os.Args)
+type (
+	// AuthorizationParams is input for authority to make decision.
+	// It can be extended in future if required auth on resources like WorkflowType and TaskList
+	AuthorizationParams struct {
+		Actor      string
+		Action     string
+		DomainName string
+	}
+
+	// AuthorizationResult is result from authority.
+	AuthorizationResult struct {
+		AuthorizationDecision AuthorizationDecision
+	}
+
+	// AuthorizationDecision is enum type for auth decision
+	AuthorizationDecision int
+)
+
+// Authority is an interface for authorization
+type Authority interface {
+	IsAuthorized(ctx context.Context, params *AuthorizationParams) (AuthorizationResult, error)
 }
