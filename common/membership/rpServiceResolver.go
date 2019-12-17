@@ -214,7 +214,7 @@ func (r *ringpopServiceResolver) refresh() error {
 	}
 
 	r.ringLastRefreshTime = time.Now()
-	r.logger.Debug("Current reachable members", tag.Addresses(addrs))
+	//r.logger.Debug("Current reachable members", tag.Addresses(addrs))
 	return nil
 }
 
